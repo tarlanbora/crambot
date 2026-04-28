@@ -1,0 +1,155 @@
+#root {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border: none;
+}
+
+.app-shell {
+  display: flex;
+  width: 100%;
+  height: 100svh;
+  text-align: left;
+  background: var(--bg);
+}
+
+.pdf-pane {
+  width: 60%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+.chat-pane {
+  width: 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-header h1,
+.pane-header h2 {
+  margin: 0 0 8px;
+}
+
+.pane-header p {
+  font-size: 14px;
+}
+
+.upload-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.upload-label input {
+  font-size: 14px;
+}
+
+.file-name {
+  margin-top: 8px;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.pdf-viewer {
+  flex: 1;
+  overflow: auto;
+  background: #f6f7fb;
+}
+
+.pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text);
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-message {
+  max-width: 90%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.chat-message.user {
+  align-self: flex-end;
+  background: var(--accent-bg);
+  color: var(--text-h);
+}
+
+.chat-message.assistant {
+  align-self: flex-start;
+  background: var(--social-bg);
+  color: var(--text-h);
+}
+
+.chat-input-row {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input-row input {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.chat-input-row button {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--text-h);
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100svh;
+  }
+
+  .pdf-pane,
+  .chat-pane {
+    width: 100%;
+  }
+
+  .pdf-pane {
+    min-height: 55svh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chat-pane {
+    min-height: 45svh;
+  }
+}
