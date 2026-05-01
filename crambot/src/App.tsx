@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -8,6 +9,14 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 interface Message {
   role: 'user' | 'assistant'
   text: string
+  image?: string
+}
+
+interface SelectionRect {
+  startX: number
+  startY: number
+  endX: number
+  endY: number
 }
 
 function App() {
@@ -19,7 +28,18 @@ function App() {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(0)
+  const [zoom, setZoom] = useState(1)
+  const [isSelecting, setIsSelecting] = useState(false)
+  const [selection, setSelection] = useState<SelectionRect | null>(null)
+  const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  
   const bottomRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -34,10 +54,16 @@ function App() {
       return url
     })
     setPdfName(file.name)
+    setCurrentPage(1)
+    setSelectedImage(null)
+    setSelection(null)
 
     // Extract text from all pages
     const arrayBuffer = await file.arrayBuffer()
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    setPdfDocument(pdf)
+    setTotalPages(pdf.numPages)
+    
     let fullText = ''
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
@@ -53,6 +79,169 @@ function App() {
         text: `"${file.name}" loaded (${pdf.numPages} pages). What do you want to know?`,
       },
     ])
+  }
+
+  const renderPage = async (pageNum: number) => {
+    if (!pdfDocument || !canvasRef.current) return
+
+    try {
+      const page = await pdfDocument.getPage(pageNum)
+      const viewport = page.getViewport({ scale: zoom })
+      
+      const canvas = canvasRef.current
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+
+      await page.render({
+        canvasContext: canvas.getContext('2d')!,
+        canvas: canvas,
+        viewport: viewport,
+      }).promise
+
+      // Clear overlay
+      if (overlayCanvasRef.current) {
+        overlayCanvasRef.current.width = viewport.width
+        overlayCanvasRef.current.height = viewport.height
+      }
+    } catch (error) {
+      console.error('Error rendering page:', error)
+    }
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = overlayCanvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+
+    setSelection({ startX: x, startY: y, endX: x, endY: y })
+    setIsSelecting(true)
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isSelecting || !selection) return
+
+    const canvas = overlayCanvasRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+
+    const newSelection = {
+      ...selection,
+      endX: Math.max(0, Math.min(x, canvas.width)),
+      endY: Math.max(0, Math.min(y, canvas.height)),
+    }
+    setSelection(newSelection)
+
+    // Draw selection rectangle on overlay
+    if (overlayCanvasRef.current) {
+      const overlayCtx = overlayCanvasRef.current.getContext('2d')!
+      overlayCtx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height)
+
+      const minX = Math.min(newSelection.startX, newSelection.endX)
+      const minY = Math.min(newSelection.startY, newSelection.endY)
+      const width = Math.abs(newSelection.endX - newSelection.startX)
+      const height = Math.abs(newSelection.endY - newSelection.startY)
+
+      overlayCtx.fillStyle = 'rgba(100, 150, 255, 0.2)'
+      overlayCtx.fillRect(minX, minY, width, height)
+
+      overlayCtx.strokeStyle = 'rgb(100, 150, 255)'
+      overlayCtx.lineWidth = 2
+      overlayCtx.strokeRect(minX, minY, width, height)
+    }
+  }
+
+  const handleMouseUp = () => {
+    setIsSelecting(false)
+  }
+
+  const extractSelectedArea = () => {
+    if (!selection || !canvasRef.current) return
+
+    const mainCanvas = canvasRef.current
+    const minX = Math.min(selection.startX, selection.endX)
+    const minY = Math.min(selection.startY, selection.endY)
+    const width = Math.abs(selection.endX - selection.startX)
+    const height = Math.abs(selection.endY - selection.startY)
+
+    if (width < 5 || height < 5) {
+      alert('Please select a larger area')
+      return
+    }
+
+    // Create a temporary canvas for the cropped image
+    const cropCanvas = document.createElement('canvas')
+    cropCanvas.width = width
+    cropCanvas.height = height
+    const ctx = cropCanvas.getContext('2d')!
+
+    // Get image data from the main canvas and draw it to crop canvas
+    const imageData = mainCanvas
+      .getContext('2d')!
+      .getImageData(minX, minY, width, height)
+    ctx.putImageData(imageData, 0, 0)
+
+    const imageDataUrl = cropCanvas.toDataURL('image/png')
+    setSelectedImage(imageDataUrl)
+    setSelection(null)
+
+    // Clear overlay
+    if (overlayCanvasRef.current) {
+      overlayCanvasRef.current.getContext('2d')!.clearRect(
+        0,
+        0,
+        overlayCanvasRef.current.width,
+        overlayCanvasRef.current.height
+      )
+    }
+  }
+
+  const sendSelectedImage = async () => {
+    if (!selectedImage) return
+
+    const userMessage = 'Here is a screenshot from the PDF:'
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'user',
+        text: userMessage,
+        image: selectedImage,
+      },
+    ])
+    setSelectedImage(null)
+    setLoading(true)
+
+    try {
+      const res = await fetch('http://127.0.0.1:8000/chat?mode=azure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMessage,
+          context: pdfText.slice(0, 4000),
+          slideNumber: currentPage,
+          image: selectedImage,
+        }),
+      })
+
+      if (!res.ok) throw new Error(`Server error: ${res.status}`)
+      const data = await res.json()
+
+      if (data.error) throw new Error(data.details || data.error)
+
+      setMessages((prev) => [...prev, { role: 'assistant', text: data.response }])
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: `Something went wrong: ${(err as Error).message}` },
+      ])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const sendMessage = async () => {
@@ -72,7 +261,7 @@ function App() {
         body: JSON.stringify({
           message: userMessage,
           context: pdfText.slice(0, 4000),
-          slideNumber: 1,
+          slideNumber: currentPage,
         }),
       })
 
@@ -101,6 +290,12 @@ function App() {
   }, [messages])
 
   useEffect(() => {
+    if (pdfDocument) {
+      renderPage(currentPage)
+    }
+  }, [pdfDocument, currentPage, zoom])
+
+  useEffect(() => {
     return () => {
       if (pdfUrl) URL.revokeObjectURL(pdfUrl)
     }
@@ -117,9 +312,93 @@ function App() {
           </label>
         </header>
 
-        <div className="pdf-viewer">
-          {pdfUrl ? (
-            <iframe title="PDF preview" src={pdfUrl} className="pdf-frame" />
+        <div className="pdf-viewer" ref={containerRef}>
+          {pdfDocument ? (
+            <>
+              <div className="canvas-container">
+                <div className="canvas-wrapper">
+                  <canvas
+                    ref={canvasRef}
+                    className="pdf-canvas"
+                  />
+                  <canvas
+                    ref={overlayCanvasRef}
+                    className="overlay-canvas"
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                  />
+                </div>
+              </div>
+              <div className="pdf-controls">
+                <button
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
+                >
+                  ← Previous
+                </button>
+                <span className="page-indicator">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next →
+                </button>
+                <button onClick={() => setZoom(zoom * 1.2)}>Zoom In</button>
+                <button onClick={() => setZoom(zoom / 1.2)}>Zoom Out</button>
+                <button
+                  onClick={() => setZoom(1)}
+                  style={{ marginLeft: 'auto' }}
+                >
+                  Reset Zoom
+                </button>
+              </div>
+              {selection && (
+                <div className="selection-controls">
+                  <button onClick={extractSelectedArea} className="extract-btn">
+                    ✓ Extract Selection
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelection(null)
+                      if (overlayCanvasRef.current) {
+                        overlayCanvasRef.current.getContext('2d')!.clearRect(
+                          0,
+                          0,
+                          overlayCanvasRef.current.width,
+                          overlayCanvasRef.current.height
+                        )
+                      }
+                    }}
+                    className="cancel-btn"
+                  >
+                    ✕ Cancel
+                  </button>
+                </div>
+              )}
+              {selectedImage && (
+                <div className="preview-section">
+                  <div className="preview-header">
+                    <h3>Selected Area</h3>
+                  </div>
+                  <img src={selectedImage} alt="Selected area" className="preview-image" />
+                  <div className="preview-actions">
+                    <button onClick={sendSelectedImage} className="send-btn">
+                      Send to Chat
+                    </button>
+                    <button
+                      onClick={() => setSelectedImage(null)}
+                      className="discard-btn"
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <div className="empty-state">Upload a PDF to view it here.</div>
           )}
@@ -135,7 +414,10 @@ function App() {
         <div className="chat-messages">
           {messages.map((msg, idx) => (
             <div key={idx} className={`chat-message ${msg.role}`}>
-              {msg.text}
+              <div className="message-text">{msg.text}</div>
+              {msg.image && (
+                <img src={msg.image} alt="Sent" className="message-image" />
+              )}
             </div>
           ))}
           {loading && (

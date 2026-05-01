@@ -62,12 +62,179 @@
   flex: 1;
   overflow: auto;
   background: #f6f7fb;
+  display: flex;
+  flex-direction: column;
 }
 
-.pdf-frame {
-  width: 100%;
-  height: 100%;
+.canvas-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  overflow: auto;
+  padding: 10px;
+}
+
+.canvas-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.pdf-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid #ddd;
+  background: white;
+  cursor: crosshair;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: block;
+}
+
+.overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  cursor: crosshair;
+}
+
+.pdf-controls {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pdf-controls button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.pdf-controls button:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.pdf-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-indicator {
+  font-size: 13px;
+  color: var(--text);
+  margin: 0 8px;
+  white-space: nowrap;
+}
+
+.selection-controls {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: #fff9e6;
+  justify-content: center;
+}
+
+.extract-btn,
+.cancel-btn {
+  padding: 8px 16px;
   border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.extract-btn {
+  background: #4CAF50;
+  color: white;
+}
+
+.extract-btn:hover {
+  background: #45a049;
+}
+
+.cancel-btn {
+  background: #f44336;
+  color: white;
+}
+
+.cancel-btn:hover {
+  background: #da190b;
+}
+
+.preview-section {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  background: var(--bg);
+  max-height: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-header {
+  margin-bottom: 8px;
+}
+
+.preview-header h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.send-btn,
+.discard-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.send-btn {
+  background: var(--accent-bg);
+  color: var(--text-h);
+}
+
+.send-btn:hover {
+  opacity: 0.9;
+}
+
+.discard-btn {
+  background: #f0f0f0;
+  color: var(--text);
+}
+
+.discard-btn:hover {
+  background: #e0e0e0;
 }
 
 .empty-state {
@@ -93,6 +260,17 @@
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.35;
+}
+
+.message-text {
+  margin-bottom: 8px;
+}
+
+.message-image {
+  max-width: 100%;
+  max-height: 250px;
+  border-radius: 8px;
+  object-fit: contain;
 }
 
 .chat-message.user {
