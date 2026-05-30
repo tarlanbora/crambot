@@ -50,6 +50,12 @@ const normalizeMathDelimiters = (text: string): string =>
 
 const prepareMessageText = (text: string): string => normalizeMathDelimiters(text)
 
+/** pdf.js viewport scale; 2 matches “zoom in twice” vs the library’s nominal page size */
+const DEFAULT_PDF_RENDER_SCALE = 2
+
+/** Must stay within backend `MAX_CONTEXT_LENGTH` so the repeated current page is not truncated away */
+const MAX_CONTEXT_CHARS = 4000
+
 const wrapTextForPDF = (
   text: string,
   maxWidth: number,
@@ -122,10 +128,11 @@ function App() {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [pdfPages, setPdfPages] = useState<string[]>([])
   const [pdfDocument, setPdfDocument] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
-  const [zoom, setZoom] = useState(1)
+  const [zoom, setZoom] = useState(DEFAULT_PDF_RENDER_SCALE)
   const [isSelecting, setIsSelecting] = useState(false)
   const [selection, setSelection] = useState<SelectionRect | null>(null)
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -135,6 +142,62 @@ function App() {
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isRenderingRef = useRef(false)
+
+  const pageCount = Math.max(totalPages, 1)
+
+  /** Full PDF text, then the active page’s text again at the end (fits `MAX_CONTEXT_CHARS`). */
+  const buildApiContext = () => {
+    const n = Math.max(pdfPages.length, totalPages, 1)
+    const safePage = Math.min(Math.max(currentPage, 1), n)
+    const idx = safePage - 1
+    let pageRepeat = (pdfPages[idx] ?? '').trim()
+    const fullDoc = (pdfPages.length > 0 ? pdfPages.join('\n\n') : pdfText).trim()
+
+    const prefix = `[Full PDF — ${n} page(s)${pdfName ? ` — ${pdfName}` : ''}]\n\n`
+    const suffixIntro =
+      `\n\n---\n[Currently viewing page ${safePage} of ${n} — that page’s text is repeated below]\n\n`
+
+    const makeSuffix = (body: string) => suffixIntro + body
+
+    let suffix = makeSuffix(pageRepeat)
+    if (prefix.length + suffix.length > MAX_CONTEXT_CHARS) {
+      const room = Math.max(
+        0,
+        MAX_CONTEXT_CHARS - prefix.length - suffixIntro.length - 1
+      )
+      pageRepeat = pageRepeat.slice(0, room) + (room > 0 ? '…' : '')
+      suffix = makeSuffix(pageRepeat)
+    }
+
+    let budget = MAX_CONTEXT_CHARS - prefix.length - suffix.length
+    if (budget <= 0) {
+      return (prefix + suffix).slice(0, MAX_CONTEXT_CHARS)
+    }
+
+    let doc = fullDoc
+    if (doc.length > budget) {
+      doc =
+        doc.slice(0, budget) +
+        '\n[…document trimmed for API length limit; end of context repeats the current page…]'
+    }
+
+    const out = prefix + doc + suffix
+    return out.length > MAX_CONTEXT_CHARS ? out.slice(0, MAX_CONTEXT_CHARS) : out
+  }
+
+  const pointerToOverlayCanvas = (
+    canvas: HTMLCanvasElement,
+    clientX: number,
+    clientY: number
+  ) => {
+    const rect = canvas.getBoundingClientRect()
+    const sx = canvas.width / rect.width || 1
+    const sy = canvas.height / rect.height || 1
+    return {
+      x: (clientX - rect.left) * sx,
+      y: (clientY - rect.top) * sy,
+    }
+  }
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -150,6 +213,7 @@ function App() {
     })
     setPdfName(file.name)
     setCurrentPage(1)
+    setZoom(DEFAULT_PDF_RENDER_SCALE)
     setSelectedImage(null)
     setSelection(null)
 
@@ -158,13 +222,16 @@ function App() {
     setPdfDocument(pdf)
     setTotalPages(pdf.numPages)
 
-    let fullText = ''
+    const pages: string[] = []
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
       const content = await page.getTextContent()
-      fullText += content.items.map((item: any) => ('str' in item ? item.str : '')).join(' ') + '\n'
+      pages.push(
+        content.items.map((item: any) => ('str' in item ? item.str : '')).join(' ')
+      )
     }
-    setPdfText(fullText)
+    setPdfPages(pages)
+    setPdfText(pages.join('\n'))
     setMessages([
       {
         role: 'assistant',
@@ -208,9 +275,7 @@ function App() {
     const canvas = overlayCanvasRef.current
     if (!canvas) return
 
-    const rect = canvas.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    const { x, y } = pointerToOverlayCanvas(canvas, e.clientX, e.clientY)
 
     setSelection({ startX: x, startY: y, endX: x, endY: y })
     setIsSelecting(true)
@@ -222,9 +287,7 @@ function App() {
     const canvas = overlayCanvasRef.current
     if (!canvas) return
 
-    const rect = canvas.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    const { x, y } = pointerToOverlayCanvas(canvas, e.clientX, e.clientY)
 
     const newSelection = {
       ...selection,
@@ -312,7 +375,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
-          context: pdfText.slice(0, 4000),
+          context: buildApiContext(),
           slideNumber: currentPage,
           image: selectedImage,
         }),
@@ -343,14 +406,13 @@ function App() {
     setLoading(true)
 
     try {
-      console.log('Context being sent:', pdfText.slice(0, 4000))
-      console.log('Context length:', pdfText.length)
+      const ctx = buildApiContext()
       const res = await fetch('http://127.0.0.1:8000/chat?mode=azure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage,
-          context: pdfText.slice(0, 4000),
+          context: ctx,
           slideNumber: currentPage,
         }),
       })
@@ -558,17 +620,85 @@ function App() {
   return (
     <div className="app-shell">
       <section className="pdf-pane">
-        <header className="pane-header">
-          <h1>Crambot</h1>
-          <label className="upload-label" style={{ marginLeft: '0.4rem', marginTop: '0.2rem' }}>
-            {pdfName ? pdfName : 'Upload your lecture material'}
-            <input type="file" accept="application/pdf" onChange={handleUpload} />
-          </label>
+        <header className="pane-header pdf-pane-header">
+          <div className="pdf-pane-header-row">
+            <h1>Crambot</h1>
+            <label className="upload-label">
+              <span className="upload-label-text">
+                {pdfName ? pdfName : 'Upload PDF'}
+              </span>
+              <input type="file" accept="application/pdf" onChange={handleUpload} />
+            </label>
+          </div>
         </header>
 
         <div className="pdf-viewer" ref={containerRef}>
           {pdfDocument ? (
             <>
+              <div className="pdf-toolbar" role="toolbar" aria-label="PDF controls">
+                <div className="pdf-toolbar-group">
+                  <button
+                    type="button"
+                    className="pdf-toolbar-btn"
+                    disabled={currentPage <= 1}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    aria-label="Previous page"
+                  >
+                    ‹
+                  </button>
+                  <label className="pdf-page-field">
+                    <span className="visually-hidden">Page</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={pageCount}
+                      value={currentPage}
+                      onChange={(e) => {
+                        const n = Number(e.target.value)
+                        if (Number.isNaN(n)) return
+                        setCurrentPage(Math.min(pageCount, Math.max(1, n)))
+                      }}
+                    />
+                    <span className="pdf-page-of">/ {pageCount}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="pdf-toolbar-btn"
+                    disabled={currentPage >= pageCount}
+                    onClick={() => setCurrentPage((p) => Math.min(pageCount, p + 1))}
+                    aria-label="Next page"
+                  >
+                    ›
+                  </button>
+                </div>
+                <div className="pdf-toolbar-divider" aria-hidden />
+                <div className="pdf-toolbar-group pdf-toolbar-zoom-group">
+                  <button
+                    type="button"
+                    className="pdf-toolbar-text-btn"
+                    onClick={() => setZoom((z) => Math.max(0.5, z / 1.2))}
+                  >
+                    −
+                  </button>
+                  <span className="pdf-zoom-indicator" title="Render scale">
+                    {zoom >= 10 ? zoom.toFixed(0) : zoom.toFixed(1)}×
+                  </span>
+                  <button
+                    type="button"
+                    className="pdf-toolbar-text-btn"
+                    onClick={() => setZoom((z) => z * 1.2)}
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    className="pdf-toolbar-reset-btn"
+                    onClick={() => setZoom(DEFAULT_PDF_RENDER_SCALE)}
+                  >
+                    Default
+                  </button>
+                </div>
+              </div>
               <div className="canvas-container">
                 <div className="canvas-wrapper">
                   <canvas ref={canvasRef} className="pdf-canvas" />
@@ -581,28 +711,6 @@ function App() {
                     onMouseLeave={handleMouseUp}
                   />
                 </div>
-              </div>
-              <div className="pdf-controls">
-                <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                >
-                  ← Previous
-                </button>
-                <span className="page-indicator">
-                  Page {currentPage} of {totalPages}
-                </span>
-                <button
-                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Next →
-                </button>
-                <button onClick={() => setZoom(zoom * 1.2)}>Zoom In</button>
-                <button onClick={() => setZoom(zoom / 1.2)}>Zoom Out</button>
-                <button onClick={() => setZoom(1)} style={{ marginLeft: 'auto' }}>
-                  Reset Zoom
-                </button>
               </div>
               {selection && (
                 <div className="selection-controls">
@@ -651,26 +759,19 @@ function App() {
       </section>
 
       <aside className="chat-pane">
-        <header className="pane-header">
-          <h2>Crambot Chat</h2>
-          <p>{pdfText ? 'PDF context loaded ✓' : 'No PDF loaded yet'}</p>
-          <button
-            onClick={exportChatAsPDF}
-            disabled={!pdfUrl || messages.length === 0}
-            style={{
-              marginTop: '0.5rem',
-              padding: '0.5rem 1rem',
-              backgroundColor: pdfUrl && messages.length > 0 ? '#4CAF50' : '#ccc',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: pdfUrl && messages.length > 0 ? 'pointer' : 'not-allowed',
-              fontSize: '14px',
-            }}
-            title="Export chat as PDF with comments"
-          >
-             📥 Export Chat as PDF
-          </button>
+        <header className="pane-header chat-pane-header">
+          <div className="chat-pane-header-row">
+            <h2>Crambot Chat</h2>
+            <button
+              type="button"
+              className="pill-control-btn"
+              onClick={exportChatAsPDF}
+              disabled={!pdfUrl || messages.length === 0}
+              title="Export chat as PDF with comments"
+            >
+              Export chat as PDF
+            </button>
+          </div>
         </header>
 
         <div className="chat-messages">
